@@ -1,0 +1,17 @@
+{
+  "name": "discord-gemini-translation-support-bot",
+  "version": "1.0.0",
+  "description": "Discord support ticket translation bot using Gemini AI",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "franc": "^6.2.0",
+    "google-translate-api-x": "^10.7.2"
+  }
+}
