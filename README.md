@@ -1,1 +1,1 @@
-.
+Confessions Babel is the multilingual support assistant for Confessions. It automatically detects and translates messages inside support tickets so users and staff can communicate seamlessly across languages.
