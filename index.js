@@ -52,15 +52,11 @@ function debugBlock(lines) {
 // =========================
 
 const allowedCategories = new Set([
-  '1074642463588888598',
-  '1313432842511978527'
+  '1505991907816378509'
 ]);
 
 const staffRoleIds = [
-  '1248090677711994901',
-  '1248118632618266655',
-  '1248097695764054147',
-  '808381326100398120'
+  '1263686371051049072'
 ];
 
 // =========================
@@ -198,36 +194,83 @@ async function getWebhook(channel) {
 }
 
 // =========================
-// INIT
+// FIELD LANGUAGE EXTRACTION
 // =========================
 
-async function initializeTicket(channel) {
-  if (ticketState.has(channel.id)) return ticketState.get(channel.id);
-
-  const messages = await channel.messages.fetch({ limit: 25 });
-
-  let combined = '';
-
+function extractLanguageFromFields(messages) {
   for (const msg of messages.values()) {
-    combined += '\n' + (msg.content || '');
 
-    for (const e of msg.embeds || []) {
-      combined += '\n' + (e.description || '');
+    for (const embed of msg.embeds || []) {
 
-      for (const f of e.fields || []) {
-        combined += `\n${f.name}: ${f.value}`;
+      for (const field of embed.fields || []) {
+
+        const fieldName = field.name
+          ?.toLowerCase()
+          .trim();
+
+        // Only use this field
+        if (fieldName === 'preferred support language (optional)') {
+
+          const value = field.value
+            ?.toLowerCase()
+            .trim();
+
+          if (!value) continue;
+
+          // Match aliases
+          for (const [code, aliases] of Object.entries(languageAliases)) {
+
+            const matched = aliases.some(alias =>
+              value.includes(alias.toLowerCase())
+            );
+
+            if (matched) {
+              return code;
+            }
+          }
+        }
       }
     }
   }
 
-  const lang = extractPreferredLanguage(combined);
-  const safeLang = VALID_LANGS.has(lang) ? lang : null;
+  return null;
+}
+
+// =========================
+// INIT
+// =========================
+
+async function initializeTicket(channel) {
+  if (ticketState.has(channel.id)) {
+    return ticketState.get(channel.id);
+  }
+
+  const messages = await channel.messages.fetch({ limit: 50 });
+
+  // ONLY pull from:
+  // "Preferred support language (Optional)"
+  const lang = extractLanguageFromFields(messages);
+
+  const safeLang = VALID_LANGS.has(lang)
+    ? lang
+    : null;
 
   const state = (!safeLang || safeLang === 'en')
-    ? { ignore: true, reason: safeLang === 'en' ? 'english' : 'invalid', disabled: false }
-    : { ignore: false, sourceLang: safeLang, disabled: false };
+    ? {
+        ignore: true,
+        reason: safeLang === 'en'
+          ? 'english'
+          : 'invalid',
+        disabled: false
+      }
+    : {
+        ignore: false,
+        sourceLang: safeLang,
+        disabled: false
+      };
 
   ticketState.set(channel.id, state);
+
   return state;
 }
 
