@@ -4,7 +4,10 @@ import {
   Client,
   GatewayIntentBits,
   WebhookClient,
-  EmbedBuilder
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } from 'discord.js';
 
 import { translate } from 'google-translate-api-x';
@@ -22,50 +25,11 @@ const client = new Client({
 });
 
 // =========================
-// DEBUG
-// =========================
-
-const DEBUG = true;
-
-const COLORS = {
-  reset: '\x1b[0m',
-  gray: '\x1b[90m',
-  cyan: '\x1b[36m'
-};
-
-function color(text, c) {
-  return `${COLORS[c]}${text}${COLORS.reset}`;
-}
-
-function debugBlock(lines) {
-  if (!DEBUG) return;
-
-  console.log(color('[DEBUG] --- Message Logging ---', 'cyan'));
-  for (const line of lines) {
-    console.log(color(`[DEBUG] ${line}`, 'gray'));
-  }
-  console.log(color('[DEBUG] ----------------------', 'cyan'));
-}
-
-// =========================
 // CONFIG
 // =========================
 
-const allowedCategories = new Set([
-  '1074642463588888598',
-  '1313432842511978527'
-]);
-
-const staffRoleIds = [
-  '1248090677711994901',
-  '1248118632618266655',
-  '1248097695764054147',
-  '808381326100398120'
-];
-
-// =========================
-// VALID LANGS
-// =========================
+const allowedCategories = new Set(['1505991907816378509']);
+const staffRoleIds = ['1263686371051049072'];
 
 const VALID_LANGS = new Set([
   'ar','bg','zh','hr','cs','da','nl','en','fi','fr','de','el','he','hi',
@@ -77,356 +41,317 @@ const VALID_LANGS = new Set([
 // STATE
 // =========================
 
-const oldChannels = new Set();
-const activeTickets = new Set();
-
 const ticketState = new Map();
+const botReadyAt = Date.now();
 
 // =========================
-// STAFF CHECK
+// HELPERS
 // =========================
 
 function isStaff(member) {
-  if (!member) return false;
-  return member.roles.cache.some(r => staffRoleIds.includes(r.id));
+  return member?.roles?.cache?.some(r => staffRoleIds.includes(r.id));
 }
-
-// =========================
-// TEXT EXTRACTION
-// =========================
-
-function extractMessageText(message) {
-  let text = message.content || '';
-
-  for (const embed of message.embeds || []) {
-    if (embed.title) text += '\n' + embed.title;
-    if (embed.description) text += '\n' + embed.description;
-
-    for (const f of embed.fields || []) {
-      text += `\n${f.name}: ${f.value}`;
-    }
-  }
-
-  return text.trim();
-}
-
-// =========================
-// LANGUAGE DETECTION
-// =========================
-
-const languageAliases = {
-  ar: ['arabic', 'العربية'],
-  bg: ['bulgarian', 'български'],
-  zh: ['chinese', '中文', 'mandarin'],
-  hr: ['croatian', 'hrvatski'],
-  cs: ['czech', 'čeština'],
-  da: ['danish', 'dansk'],
-  nl: ['dutch', 'nederlands'],
-  en: ['english'],
-  fi: ['finnish', 'suomi'],
-  fr: ['french', 'français'],
-  de: ['german', 'deutsch'],
-  el: ['greek', 'ελληνικά'],
-  he: ['hebrew', 'עברית'],
-  hi: ['hindi', 'हिन्दी'],
-  hu: ['hungarian', 'magyar'],
-  id: ['indonesian', 'bahasa indonesia'],
-  it: ['italian', 'italiano'],
-  ja: ['japanese', '日本語'],
-  ko: ['korean', '한국어'],
-  lt: ['lithuanian', 'lietuvių'],
-  no: ['norwegian', 'norsk'],
-  pl: ['polish', 'polski'],
-  pt: ['portuguese', 'português'],
-  ro: ['romanian', 'română'],
-  ru: ['russian', 'русский'],
-  sk: ['slovak', 'slovenčina'],
-  es: ['spanish', 'español'],
-  sv: ['swedish', 'svenska'],
-  th: ['thai', 'ไทย'],
-  tr: ['turkish', 'türkçe'],
-  uk: ['ukrainian', 'українська'],
-  vi: ['vietnamese', 'tiếng việt'],
-  tl: ['tagalog', 'filipino']
-};
-
-function extractPreferredLanguage(text) {
-  if (!text) return null;
-
-  const lower = text.toLowerCase();
-
-  for (const [code, aliases] of Object.entries(languageAliases)) {
-    if (aliases.some(a => lower.includes(a))) {
-      return code;
-    }
-  }
-
-  return null;
-}
-
-// =========================
-// SAFE TRANSLATION
-// =========================
 
 async function translateText(text, to) {
-  if (!to || !VALID_LANGS.has(to)) {
-    console.error('[TRANSLATE BLOCKED] invalid target:', to);
-    return text;
-  }
+  if (!to || !VALID_LANGS.has(to)) return { text, detected: 'auto' };
 
   const res = await translate(text, { to });
-  return res.text;
-}
 
-// =========================
-// WEBHOOK
-// =========================
+  return {
+    text: res.text,
+    detected: res.from?.language?.iso || 'auto'
+  };
+}
 
 async function getWebhook(channel) {
   const hooks = await channel.fetchWebhooks();
-
   let hook = hooks.find(h => h.name === 'Confessions Babel');
 
   if (!hook) {
     hook = await channel.createWebhook({ name: 'Confessions Babel' });
   }
 
-  return new WebhookClient({
-    id: hook.id,
-    token: hook.token
-  });
+  return new WebhookClient({ id: hook.id, token: hook.token });
 }
 
 // =========================
-// FIELD LANGUAGE EXTRACTION
+// EXTRACTORS
 // =========================
 
-function extractLanguageFromFields(messages) {
+function extractLanguage(messages) {
   for (const msg of messages.values()) {
-
     for (const embed of msg.embeds || []) {
-
       for (const field of embed.fields || []) {
+        if (field.name?.toLowerCase().includes('preferred support language')) {
+          const val = field.value?.toLowerCase() || '';
 
-        const fieldName = field.name
-          ?.toLowerCase()
-          .trim();
-
-        // Only use this field
-        if (fieldName === 'preferred support language (optional)') {
-
-          const value = field.value
-            ?.toLowerCase()
-            .trim();
-
-          if (!value) continue;
-
-          // Match aliases
-          for (const [code, aliases] of Object.entries(languageAliases)) {
-
-            const matched = aliases.some(alias =>
-              value.includes(alias.toLowerCase())
-            );
-
-            if (matched) {
-              return code;
-            }
-          }
+          if (val.includes('french')) return 'fr';
+          if (val.includes('german')) return 'de';
+          if (val.includes('spanish')) return 'es';
+          if (val.includes('japanese')) return 'ja';
+          if (val.includes('korean')) return 'ko';
+          if (val.includes('english')) return 'en';
         }
       }
     }
   }
+  return 'en';
+}
 
+// 🔥 RESTORED: ticket question extraction
+function extractQuestion(messages) {
+  for (const msg of messages.values()) {
+    for (const embed of msg.embeds || []) {
+      for (const field of embed.fields || []) {
+        if (field.name?.toLowerCase().includes('what is your question?')) {
+          return field.value;
+        }
+      }
+    }
+  }
   return null;
 }
 
 // =========================
-// INIT
+// INIT TICKET
 // =========================
 
-async function initializeTicket(channel) {
-  if (ticketState.has(channel.id)) {
-    return ticketState.get(channel.id);
-  }
+async function initTicket(channel) {
+  if (ticketState.has(channel.id)) return ticketState.get(channel.id);
 
-  const messages = await channel.messages.fetch({ limit: 50 });
+  const messages = await channel.messages.fetch({ limit: 20 });
 
-  // ONLY pull from:
-  // "Preferred support language (Optional)"
-  const lang = extractLanguageFromFields(messages);
+  const userLang = extractLanguage(messages);
+  const question = extractQuestion(messages);
 
-  const safeLang = VALID_LANGS.has(lang)
-    ? lang
-    : null;
-
-  const state = (!safeLang || safeLang === 'en')
-    ? {
-        ignore: true,
-        reason: safeLang === 'en'
-          ? 'english'
-          : 'invalid',
-        disabled: false
-      }
-    : {
-        ignore: false,
-        sourceLang: safeLang,
-        disabled: false
-      };
+  const state = {
+    enabled: false,
+    staffLang: 'en',
+    userLang,
+    question,
+    initialized: true
+  };
 
   ticketState.set(channel.id, state);
+
+  // 🔥 translate ticket question for preview
+  const translatedQuestion = question
+    ? (await translateText(question, 'en')).text
+    : null;
+
+  const setupEmbed = new EmbedBuilder()
+    .setColor(0xFEE75C)
+    .setTitle('Translation System')
+    .addFields(
+      { name: 'User Language', value: state.userLang.toUpperCase() },
+      { name: 'Staff Language', value: state.staffLang.toUpperCase() },
+      {
+        name: 'Ticket Question (Translated)',
+        value: translatedQuestion
+          ? translatedQuestion.slice(0, 1024)
+          : 'Not found'
+      }
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('translate_yes')
+      .setLabel('Enable')
+      .setStyle(ButtonStyle.Success),
+
+    new ButtonBuilder()
+      .setCustomId('translate_no')
+      .setLabel('Disable')
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  const msg = await channel.send({
+    embeds: [setupEmbed],
+    components: [row]
+  });
+
+  const collector = msg.createMessageComponentCollector({ time: 60000 });
+
+  collector.on('collect', async (i) => {
+    const st = ticketState.get(channel.id);
+
+    if (i.customId === 'translate_yes') {
+      st.enabled = true;
+
+      await i.update({
+        content: '✅ Enabled',
+        embeds: [],
+        components: []
+      });
+
+    } else {
+      st.enabled = false;
+
+      await i.update({
+        content: '❌ Disabled',
+        embeds: [],
+        components: []
+      });
+    }
+
+    ticketState.set(channel.id, st);
+    collector.stop();
+  });
+
+  collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
 
   return state;
 }
 
 // =========================
-// READY
-// =========================
-
-client.once('ready', async () => {
-  console.log(`[READY] Logged in as ${client.user.tag}`);
-
-  for (const guild of client.guilds.cache.values()) {
-    await guild.channels.fetch();
-
-    for (const channel of guild.channels.cache.values()) {
-      if (!channel.parentId) continue;
-
-      if (allowedCategories.has(channel.parentId)) {
-        oldChannels.add(channel.id);
-      }
-    }
-  }
-
-  console.log(`[BOOT] Cached old tickets: ${oldChannels.size}`);
-});
-
-// =========================
-// MESSAGE HANDLER
+// MESSAGE BRIDGE
 // =========================
 
 client.on('messageCreate', async (message) => {
   try {
-    if (!message.guild) return;
-    if (message.author.bot) return;
-    if (message.webhookId) return;
+    if (!message.guild || message.author.bot || message.webhookId) return;
+    if (!message.channel.parentId || !allowedCategories.has(message.channel.parentId)) return;
 
-    if (!message.channel.parentId || !allowedCategories.has(message.channel.parentId)) {
-      return;
+    if (message.createdTimestamp < botReadyAt) return;
+
+    // 🚫 ignore commands
+    if (message.content.startsWith('!ticket-lang')) return;
+
+    const channelId = message.channel.id;
+
+    if (!ticketState.has(channelId)) {
+      await initTicket(message.channel);
     }
 
-    if (oldChannels.has(message.channel.id)) return;
+    const state = ticketState.get(channelId);
+    if (!state?.enabled) return;
 
-    const rawText = extractMessageText(message);
-    if (!rawText) return;
+    const raw = message.content;
+    if (!raw) return;
 
-    // =========================
-    // COMMANDS
-    // =========================
+    const isStaffMember = isStaff(message.member);
 
-    const content = message.content?.toLowerCase();
+    // 🔁 BIDIRECTIONAL LOGIC
+    const targetLang = isStaffMember ? state.userLang : state.staffLang;
 
-    if (content === '!disable' || content === '!enable' || content === '!status') {
-      let state = ticketState.get(message.channel.id);
-
-      if (!state) {
-        state = await initializeTicket(message.channel);
-      }
-
-      if (content === '!disable') {
-        state.disabled = true;
-        ticketState.set(message.channel.id, state);
-
-        return message.reply({
-          content: '❌ Translations disabled for this ticket.',
-          allowedMentions: { repliedUser: true }
-        });
-      }
-
-      if (content === '!enable') {
-        state.disabled = false;
-        ticketState.set(message.channel.id, state);
-
-        return message.reply({
-          content: '✅ Translations enabled for this ticket.',
-          allowedMentions: { repliedUser: true }
-        });
-      }
-
-      if (content === '!status') {
-        return message.reply({
-          content:
-            `📊 **Ticket Status**\n` +
-            `Translations: ${state.disabled ? '❌ Disabled' : '✅ Enabled'}\n` +
-            `Language: ${state.sourceLang ? state.sourceLang.toUpperCase() : 'Unknown'}`,
-          allowedMentions: { repliedUser: true }
-        });
-      }
-    }
-
-    let state = ticketState.get(message.channel.id);
-
-    if (!activeTickets.has(message.channel.id)) {
-      activeTickets.add(message.channel.id);
-      state = await initializeTicket(message.channel);
-
-      if (state.ignore) return;
-    }
-
-    if (!state || state.ignore) return;
-    if (state.disabled) return;
-
-    const isStaffUser = isStaff(message.member);
-
-    const webhook = await getWebhook(message.channel);
-
-    const detectedLang = extractPreferredLanguage(rawText) || state.sourceLang;
-
-    const translated = isStaffUser
-      ? await translateText(rawText, state.sourceLang)
-      : await translateText(rawText, 'en');
+    const result = await translateText(raw, targetLang);
 
     await message.delete().catch(() => {});
 
-    debugBlock([
-      `Channel: ${message.channel.id}`,
-      `Author: ${message.author.tag}`,
-      `Content: ${rawText}`,
-      `Lang: ${state.sourceLang}`,
-      `Translated: ${translated}`
-    ]);
-
     const embed = new EmbedBuilder()
-      .setColor(isStaffUser ? 0x5865F2 : 0x57F287)
+      .setColor(isStaffMember ? 0x5865F2 : 0x57F287)
       .addFields(
         {
-          name: 'Original Message',
-          value: rawText.slice(0, 1024) || '*Empty*'
+          name: isStaffMember ? 'STAFF' : 'USER',
+          value: raw.slice(0, 1024)
         },
         {
           name: 'Translated Message',
-          value: translated.slice(0, 1024) || '*Empty*'
+          value: result.text.slice(0, 1024)
         }
       )
       .setFooter({
-        text: isStaffUser
-          ? `[Staff] Translated into ${state.sourceLang?.toUpperCase()}`
-          : `[User] Translated into EN`
-      })
-      .setTimestamp();
+        text: `${isStaffMember ? 'STAFF → USER' : 'USER → STAFF'} (${targetLang.toUpperCase()})`
+      });
 
-    return webhook.send({
-      username: `${message.member.displayName} (Translated)`,
+    const webhook = await getWebhook(message.channel);
+
+    await webhook.send({
+      username: `${message.member.displayName}`,
       avatarURL: message.author.displayAvatarURL(),
       embeds: [embed]
     });
 
   } catch (err) {
-    console.error('[ERROR]', err);
+    console.error(err);
   }
 });
 
 // =========================
-// LOGIN
+// STAFF COMMANDS
 // =========================
+
+client.on('messageCreate', async (message) => {
+  try {
+    if (!message.guild || message.author.bot) return;
+    if (!message.content.startsWith('!ticket-lang')) return;
+    if (!isStaff(message.member)) return;
+
+    const args = message.content.split(' ');
+    const state = ticketState.get(message.channel.id);
+
+    if (!state) return message.reply('This ticket already exists, and translations are not enabled for it.');
+
+    const sub = args[1];
+
+    if (sub === 'view') {
+      return message.reply(
+        `**User Language**: ${state.userLang}\n**Staff Language**: ${state.staffLang}`
+      );
+    }
+
+    if (sub === 'set') {
+      const type = args[2];
+      const lang = args[3];
+
+      if (!VALID_LANGS.has(lang)) {
+        return message.reply('Invalid language');
+      }
+
+      if (type === 'user') state.userLang = lang;
+      else if (type === 'staff') state.staffLang = lang;
+      else return message.reply('use user or staff');
+
+      ticketState.set(message.channel.id, state);
+
+      return message.reply({
+  embeds: [
+    new EmbedBuilder()
+      .setColor(0x57F287)
+      .setTitle('Language Updated')
+      .addFields(
+        { name: 'Target', value: type === 'user' ? 'User Language' : 'Staff Language', inline: true },
+        { name: 'New Language', value: lang.toUpperCase(), inline: true }
+      )
+      .setFooter({ text: 'Changes apply instantly' })
+  ]
+});
+    }
+
+    return message.reply({
+  embeds: [
+    new EmbedBuilder()
+      .setColor(0xFEE75C)
+      .setTitle('Language Command Help')
+      .setDescription('Set how this ticket translates messages')
+      .addFields(
+        {
+          name: 'Format',
+          value: '`!ticket-lang set user <lang>`\n`!ticket-lang set staff <lang>`'
+        },
+        {
+          name: 'Examples',
+          value: '`!ticket-lang set staff de`\n`!ticket-lang set user fr`'
+        },
+        {
+          name: 'Valid Languages',
+          value: 'en, fr, de, es, it, ja, ko, zh, ru, etc.'
+        }
+      )
+      .setFooter({ text: 'This only affects this ticket' })
+  ]
+});
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+// =========================
+// READY
+// =========================
+
+client.once('ready', () => {
+  console.log(`[READY] Logged in as ${client.user.tag}`);
+});
 
 client.login(process.env.DISCORD_TOKEN);
