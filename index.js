@@ -29,7 +29,13 @@ const client = new Client({
 // =========================
 
 const allowedCategories = new Set(['1505991907816378509']);
-const staffRoleIds = ['1263686371051049072'];
+const staffRoleIds = [
+  '1263686371051049072',
+  '1248118632618266655',
+  '1248090677711994901',
+  '808381326100398120',
+  '1248097695764054147',
+];
 
 const VALID_LANGS = new Set([
   'ar','bg','zh','hr','cs','da','nl','en','fi','fr','de','el','he','hi',
