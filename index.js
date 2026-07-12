@@ -28,7 +28,10 @@ const client = new Client({
 // CONFIG
 // =========================
 
-const allowedCategories = new Set(['1505991907816378509']);
+const allowedCategories = new Set([
+  '1074642463588888598',
+  '1313432842511978527'
+]);
 const staffRoleIds = [
   '1263686371051049072',
   '1248118632618266655',
