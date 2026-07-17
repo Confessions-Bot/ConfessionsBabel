@@ -11,11 +11,6 @@ import {
 } from 'discord.js';
 
 import { translate } from 'google-translate-api-x';
-
-// =========================
-// CLIENT
-// =========================
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -23,10 +18,6 @@ const client = new Client({
     GatewayIntentBits.MessageContent
   ]
 });
-
-// =========================
-// CONFIG
-// =========================
 
 const allowedCategories = new Set([
   '1074642463588888598',
@@ -39,6 +30,8 @@ const staffRoleIds = [
   '808381326100398120',
   '1248097695764054147',
 ];
+
+const imageLogChannelId = "1527776081770315878";
 
 const LANGUAGE_MAP = {
   ar: "ar",
@@ -145,18 +138,10 @@ const LANGUAGE_MAP = {
 
 const VALID_LANGS = new Set(Object.values(LANGUAGE_MAP));
 
-// =========================
-// STATE
-// =========================
-
 const ticketState = new Map();
 const ignoredTickets = new Set();
 
 const botReadyAt = Date.now();
-
-// =========================
-// HELPERS
-// =========================
 
 function isStaff(member) {
   return member?.roles?.cache?.some(r => staffRoleIds.includes(r.id));
@@ -184,9 +169,6 @@ async function getWebhook(channel) {
   return new WebhookClient({ id: hook.id, token: hook.token });
 }
 
-// =========================
-// EXTRACTORS
-// =========================
 
 function extractLanguage(messages) {
   for (const msg of messages.values()) {
@@ -222,10 +204,6 @@ function extractQuestion(messages) {
   return null;
 }
 
-// =========================
-// INIT TICKET
-// =========================
-
 async function initTicket(channel) {
   if (ticketState.has(channel.id)) return ticketState.get(channel.id);
 
@@ -243,8 +221,6 @@ async function initTicket(channel) {
   };
 
   ticketState.set(channel.id, state);
-
-  // 🔥 translate ticket question for preview
   const translatedQuestion = question
     ? (await translateText(question, 'en')).text
     : null;
@@ -313,9 +289,23 @@ async function initTicket(channel) {
   return state;
 }
 
-// =========================
-// MESSAGE BRIDGE
-// =========================
+async function uploadImageToLog(message, attachment) {
+  const logChannel = message.guild.channels.cache.get(imageLogChannelId);
+
+  if (!logChannel) {
+    console.log("Image log channel not found");
+    return null;
+  }
+
+  const sent = await logChannel.send({
+    content: `Image from ${message.author.tag} (\`${message.author.id}\`) successfully logged. \n**Channel:** #${message.channel.name} (\`${message.channel.id}\`)`,
+    files: [attachment.url]
+  });
+
+  const loggedAttachment = sent.attachments.first();
+
+  return loggedAttachment?.url || null;
+}
 
 client.on('messageCreate', async (message) => {
   try {
@@ -324,67 +314,101 @@ client.on('messageCreate', async (message) => {
 
     if (message.createdTimestamp < botReadyAt) return;
 
-    // 🚫 ignore commands
+    // Ignore commands
     if (message.content.startsWith('!ticket-lang')) return;
 
     const channelId = message.channel.id;
 
     if (ignoredTickets.has(channelId)) {
-    console.log(`[IGNORED] ${message.channel.name} (${channelId})`);
-    return;
-}
+      console.log(`[IGNORED] ${message.channel.name} (${channelId})`);
+      return;
+    }
 
     if (!ticketState.has(channelId)) {
       await initTicket(message.channel);
     }
 
     const state = ticketState.get(channelId);
+
     if (!state?.enabled) return;
 
-    const raw = message.content;
-    if (!raw) return;
+    const raw = message.content || "";
+    const attachments = [...message.attachments.values()];
+
+    if (!raw && attachments.length === 0) return;
 
     const isStaffMember = isStaff(message.member);
 
-    // 🔁 BIDIRECTIONAL LOGIC
-    const targetLang = isStaffMember ? state.userLang : state.staffLang;
+    const targetLang = isStaffMember
+      ? state.userLang
+      : state.staffLang;
 
-    const result = await translateText(raw, targetLang);
-
-    await message.delete().catch(() => {});
+    const result = await translateText(
+      raw || " ",
+      targetLang
+    );
 
     const embed = new EmbedBuilder()
-      .setColor(isStaffMember ? 0x5865F2 : 0x57F287)
-      .addFields(
+      .setColor(
+        isStaffMember
+          ? 0x5865F2
+          : 0x57F287
+      );
+
+    if (raw) {
+      embed.addFields(
         {
-          name: isStaffMember ? 'Staff Message' : 'User Message',
+          name: isStaffMember
+            ? "Staff Message"
+            : "User Message",
           value: raw.slice(0, 1024)
         },
         {
-          name: 'Translated Message',
+          name: "Translated Message",
           value: result.text.slice(0, 1024)
         }
-      )
-      .setFooter({
-        text: `${isStaffMember ? 'STAFF → USER' : 'USER → STAFF'} (${targetLang.toUpperCase()})`
-      });
+      );
+    }
 
-    const webhook = await getWebhook(message.channel);
+const image = attachments.find(att =>
+  att.contentType?.startsWith("image/")
+);
 
-    await webhook.send({
-      username: `${message.member.displayName}`,
-      avatarURL: message.author.displayAvatarURL(),
-      embeds: [embed]
+if (image) {
+
+  const permanentImageUrl = await uploadImageToLog(
+    message,
+    image
+  );
+
+  if (permanentImageUrl) {
+    embed.setImage(permanentImageUrl);
+  }
+
+}
+
+    embed.setFooter({
+      text:
+        `${isStaffMember ? "STAFF → USER" : "USER → STAFF"} (${targetLang.toUpperCase()})`
     });
+
+const webhook = await getWebhook(message.channel);
+
+await webhook.send({
+  username: message.member.displayName,
+  avatarURL: message.author.displayAvatarURL(),
+  embeds: [embed]
+});
+
+await message.delete().catch(() => {});
+
+    // Delete after webhook copy succeeds
+    await message.delete().catch(() => {});
 
   } catch (err) {
     console.error(err);
   }
 });
-
-// =========================
-// STAFF COMMANDS
-// =========================
 
 client.on('messageCreate', async (message) => {
   try {
@@ -481,10 +505,6 @@ if (sub === 'set') {
     console.error(err);
   }
 });
-
-// =========================
-// READY
-// =========================
 
 client.once('ready', async () => {
   console.log(`[READY] Logged in as ${client.user.tag}`);
