@@ -31,7 +31,7 @@ const staffRoleIds = [
   '1248097695764054147',
 ];
 
-const imageLogChannelId = "1527776081770315878";
+const imageLogChannelId = "1527779345433886830";
 
 const LANGUAGE_MAP = {
   ar: "ar",
